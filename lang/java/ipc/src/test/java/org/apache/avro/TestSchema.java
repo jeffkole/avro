@@ -913,4 +913,428 @@ public class TestSchema {
   public void testLockedArrayList10() {
     lockedArrayList().remove(1);
   }
+
+  private static final Schema INT_SCHEMA = Schema.create(Type.INT);
+  private static final Schema LONG_SCHEMA = Schema.create(Type.LONG);
+  private static final Schema FLOAT_SCHEMA = Schema.create(Type.FLOAT);
+  private static final Schema DOUBLE_SCHEMA = Schema.create(Type.DOUBLE);
+  private static final Schema NULL_SCHEMA = Schema.create(Type.NULL);
+  private static final Schema STRING_SCHEMA = Schema.create(Type.STRING);
+  private static final Schema BOOLEAN_SCHEMA = Schema.create(Type.BOOLEAN);
+
+  private static void assertSubsumes(Schema parent, Schema child) {
+    assertTrue(String.format("%s is not a superset of %s", parent, child),
+        parent.subsumes(child));
+  }
+
+  private static void assertNotSubsumes(Schema parent, Schema child) {
+    assertFalse(String.format("%s is a superset of %s", parent, child),
+        parent.subsumes(child));
+  }
+
+  @Test
+  public void testSubsumesIdentities() {
+    assertSubsumes(INT_SCHEMA, INT_SCHEMA);
+    assertSubsumes(LONG_SCHEMA, LONG_SCHEMA);
+    assertSubsumes(FLOAT_SCHEMA, FLOAT_SCHEMA);
+    assertSubsumes(DOUBLE_SCHEMA, DOUBLE_SCHEMA);
+    assertSubsumes(NULL_SCHEMA, NULL_SCHEMA);
+    assertSubsumes(STRING_SCHEMA, STRING_SCHEMA);
+    assertSubsumes(BOOLEAN_SCHEMA, BOOLEAN_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesLong() {
+    assertSubsumes(LONG_SCHEMA, INT_SCHEMA);
+    assertNotSubsumes(INT_SCHEMA, LONG_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesFloat() {
+    assertSubsumes(FLOAT_SCHEMA, INT_SCHEMA);
+    assertSubsumes(FLOAT_SCHEMA, LONG_SCHEMA);
+
+    assertNotSubsumes(INT_SCHEMA, FLOAT_SCHEMA);
+    assertNotSubsumes(LONG_SCHEMA, FLOAT_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesDouble() {
+    assertSubsumes(DOUBLE_SCHEMA, INT_SCHEMA);
+    assertSubsumes(DOUBLE_SCHEMA, LONG_SCHEMA);
+    assertSubsumes(DOUBLE_SCHEMA, FLOAT_SCHEMA);
+
+    assertNotSubsumes(INT_SCHEMA, DOUBLE_SCHEMA);
+    assertNotSubsumes(LONG_SCHEMA, DOUBLE_SCHEMA);
+    assertNotSubsumes(FLOAT_SCHEMA, DOUBLE_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesArray() {
+    Schema intArray = Schema.createArray(INT_SCHEMA);
+    Schema longArray = Schema.createArray(LONG_SCHEMA);
+
+    assertSubsumes(intArray, intArray);
+    assertSubsumes(longArray, intArray);
+    assertNotSubsumes(intArray, longArray);
+  }
+
+  @Test
+  public void testSubsumesMap() {
+    Schema intMap = Schema.createMap(INT_SCHEMA);
+    Schema longMap = Schema.createMap(LONG_SCHEMA);
+
+    assertSubsumes(intMap, intMap);
+    assertSubsumes(longMap, intMap);
+    assertNotSubsumes(intMap, longMap);
+  }
+
+  @Test
+  public void testSubsumesFixed() {
+    Schema s1 = Schema.createFixed("foo", "", "", 4);
+    Schema s2 = Schema.createFixed("foo", "", "", 3);
+    Schema s3 = Schema.createFixed("bar", "", "", 4);
+
+    assertSubsumes(s1, s1);
+    assertNotSubsumes(s1, s2);
+    assertNotSubsumes(s2, s1);
+    assertNotSubsumes(s1, s3);
+  }
+
+  @Test
+  public void testSubsumesEnum() {
+    Schema s1 = Schema.createEnum("foo", "", "",
+        Arrays.asList("FOO", "BAR", "BAZ"));
+    Schema s2 = Schema.createEnum("foo", "", "", Arrays.asList("FOO", "BAR"));
+    Schema s3 = Schema.createEnum("bar", "", "",
+        Arrays.asList("FOO", "BAR", "BAZ"));
+
+    assertSubsumes(s1, s2);
+    assertNotSubsumes(s2, s1);
+    assertNotSubsumes(s1, s3);
+  }
+
+  private void testSimpleType(Type type) {
+    Schema s1 = Schema.create(type);
+    Schema s2 = Schema.create(type);
+
+    assertSubsumes(s1, s2);
+    assertSubsumes(s2, s1);
+    assertNotSubsumes(s1, INT_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesBytes() {
+    testSimpleType(Type.BYTES);
+  }
+
+  @Test
+  public void testSubsumesBoolean() {
+    testSimpleType(Type.BOOLEAN);
+  }
+
+  @Test
+  public void testSubsumesNull() {
+    testSimpleType(Type.NULL);
+  }
+
+  @Test
+  public void testSubsumesString() {
+    testSimpleType(Type.STRING);
+  }
+
+  @Test
+  public void testSubsumesSimpleUnion() {
+    Schema s1 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA));
+    Schema s2 = INT_SCHEMA;
+
+    assertSubsumes(s1, s2);
+    assertNotSubsumes(s2, s1);
+  }
+
+  @Test
+  public void testSubsumesDoubleUnion() {
+    Schema s1 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA,
+        STRING_SCHEMA));
+    Schema s2 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA));
+    Schema s3 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, STRING_SCHEMA,
+        INT_SCHEMA));
+    Schema s4 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, LONG_SCHEMA));
+
+    assertSubsumes(s1, s2);
+    assertSubsumes(s1, s3);
+    assertSubsumes(s3, s1);
+    assertNotSubsumes(s2, s1);
+    assertSubsumes(s3, s1);
+    assertSubsumes(s4, s2);
+    assertNotSubsumes(s2, s4);
+    assertSubsumes(s4, INT_SCHEMA);
+  }
+
+  @Test
+  public void testSubsumesRecord() {
+    Schema s1 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+    Schema s2 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'},"
+        + "{'name': 'b', 'type': 'int'} ] }").replace('\'', '"'));
+    Schema s3 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'},"
+        + "{'name': 'b', 'type': 'int', 'default': 0} ] }").replace('\'', '"'));
+    Schema s4 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'b', 'type': 'int'},"
+        + "{'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+
+    assertNotSubsumes(s1, s2);
+    assertNotSubsumes(s1, s3);
+    assertNotSubsumes(s1,s4);
+    assertNotSubsumes(s2, s1);
+    assertSubsumes(s2, s3);
+    assertSubsumes(s2, s4);
+    assertSubsumes(s3, s1);
+    assertSubsumes(s3, s2);
+    assertSubsumes(s3, s4);
+    assertNotSubsumes(s4, s1);
+    assertSubsumes(s4, s2);
+    assertSubsumes(s4, s3);
+  }
+
+  @Test
+  public void testSubsumesAliases() {
+    Schema s1 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+    Schema s2 = Schema.parse(("{'type': 'record', 'name': 'Bar', 'aliases': ['Foo'],"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+
+    assertSubsumes(s2,s1);
+    assertNotSubsumes(s1,s2);
+  }
+
+  @Test
+  public void testSubsumesRecursive() {
+    String jsonSchema = "{\"type\":\"record\", \"name\":\"List\", \"fields\": ["
+      +"{\"name\":\"next\", \"type\":\"List\"}]}";
+    Schema s1 = Schema.parse(jsonSchema);
+    Schema s2 = Schema.parse(jsonSchema);
+    assertSubsumes(s1, s2);
+  }
+
+  private static void assertUnify(Schema s1, Schema s2, Schema expected) {
+    assertEquals(String.format("Schemas %s and %s should unify to %s", s1, s2,
+        expected), expected, s1.unify(s2));
+    assertEquals(String.format("Schemas %s and %s should unify to %s", s1, s2,
+        expected), expected, s2.unify(s1));
+  }
+
+  private static void assertUnifyFailsDuplicateNames(Schema s1, Schema s2) {
+    try {
+      s1.unify(s2);
+      fail("schemas shouldn't unify.");
+    }
+    catch(AvroRuntimeException e) {
+      assertTrue(e.getMessage().contains("Duplicate in union"));
+    }
+  }
+
+  @Test
+  public void testUnifyIdentities() {
+    assertUnify(INT_SCHEMA, INT_SCHEMA, INT_SCHEMA);
+    assertUnify(LONG_SCHEMA, LONG_SCHEMA, LONG_SCHEMA);
+    assertUnify(FLOAT_SCHEMA, FLOAT_SCHEMA, FLOAT_SCHEMA);
+    assertUnify(DOUBLE_SCHEMA, DOUBLE_SCHEMA, DOUBLE_SCHEMA);
+    assertUnify(NULL_SCHEMA, NULL_SCHEMA, NULL_SCHEMA);
+    assertUnify(STRING_SCHEMA, STRING_SCHEMA, STRING_SCHEMA);
+    assertUnify(BOOLEAN_SCHEMA, BOOLEAN_SCHEMA, BOOLEAN_SCHEMA);
+  }
+
+  @Test
+  public void testUnifyNumberTypes() {
+    assertUnify(LONG_SCHEMA, INT_SCHEMA, LONG_SCHEMA);
+    assertUnify(FLOAT_SCHEMA, INT_SCHEMA, FLOAT_SCHEMA);
+    assertUnify(FLOAT_SCHEMA, LONG_SCHEMA, FLOAT_SCHEMA);
+    assertUnify(DOUBLE_SCHEMA, INT_SCHEMA, DOUBLE_SCHEMA);
+    assertUnify(DOUBLE_SCHEMA, LONG_SCHEMA, DOUBLE_SCHEMA);
+    assertUnify(DOUBLE_SCHEMA, FLOAT_SCHEMA, DOUBLE_SCHEMA);
+  }
+
+  @Test
+  public void testUnifyArray() {
+    Schema intArray = Schema.createArray(INT_SCHEMA);
+    Schema longArray = Schema.createArray(LONG_SCHEMA);
+    Schema stringArray = Schema.createArray(STRING_SCHEMA);
+    Schema stringIntArray = Schema.createArray(Schema.createUnion(
+          Arrays.asList(STRING_SCHEMA, INT_SCHEMA)));
+    Schema intStringArray = Schema.createArray(Schema.createUnion(
+          Arrays.asList(INT_SCHEMA, STRING_SCHEMA)));
+
+    assertUnify(intArray, longArray, longArray);
+    assertEquals(stringIntArray, stringArray.unify(intArray));
+    assertEquals(intStringArray, intArray.unify(stringArray));
+  }
+
+  @Test
+  public void testUnifyMap() {
+    Schema intMap = Schema.createMap(INT_SCHEMA);
+    Schema longMap = Schema.createMap(LONG_SCHEMA);
+    Schema stringMap = Schema.createMap(STRING_SCHEMA);
+    Schema stringIntMap = Schema.createMap(Schema.createUnion(
+          Arrays.asList(STRING_SCHEMA, INT_SCHEMA)));
+    Schema intStringMap = Schema.createMap(Schema.createUnion(
+          Arrays.asList(INT_SCHEMA, STRING_SCHEMA)));
+
+    assertUnify(intMap, longMap, longMap);
+    assertEquals(stringIntMap, stringMap.unify(intMap));
+    assertEquals(intStringMap, intMap.unify(stringMap));
+  }
+
+  @Test
+  public void testUnifyFixed() {
+    Schema s1 = Schema.createFixed("foo", "", "", 4);
+    Schema s2 = Schema.createFixed("foo", "", "", 3);
+    Schema s3 = Schema.createFixed("bar", "", "", 4);
+    Schema s4 = Schema.createFixed("foo", "", "", 4);
+    s4.addAlias("bar");
+    Schema s5 = Schema.createFixed("bar", "", "", 4);
+    s5.addAlias("foo");
+
+    assertEquals(s4, s1.unify(s3));
+    assertEquals(s5, s3.unify(s1));
+    assertUnifyFailsDuplicateNames(s1, s2);
+  }
+
+  @Test
+  public void testUnifyEnum() {
+    List<String> fbb = Arrays.asList("FOO", "BAR", "BAZ");
+    Schema s1 = Schema.createEnum("foo", "", "", fbb);
+    Schema s2 = Schema.createEnum("foo", "", "", Arrays.asList("FOO", "BAR"));
+    Schema s3 = Schema.createEnum("bar", "", "", fbb);
+    Schema s4 = Schema.createEnum("foo", "", "", Arrays.asList("X"));
+    Schema s5 = Schema.createEnum("bar", "", "", fbb);
+    s5.addAlias("foo");
+
+    assertUnify(s1, s2, s1);
+    assertEquals(s2.unify(s4), Schema.createEnum("foo", "", "",
+        Arrays.asList("FOO", "BAR", "X")));
+    assertEquals(s4.unify(s2), Schema.createEnum("foo", "", "",
+        Arrays.asList("X", "FOO", "BAR")));
+
+    assertEquals(s5, s3.unify(s1));
+  }
+
+  @Test
+  public void testUnifySimpleTypes() {
+    Schema [] simple = new Schema[] { Schema.create(Type.BYTES),
+        BOOLEAN_SCHEMA, NULL_SCHEMA, STRING_SCHEMA, INT_SCHEMA };
+    for (int i=0; i<simple.length; i++) {
+      for (int j=i+1; j<simple.length; j++) {
+        assertEquals(Schema.createUnion(
+            Arrays.asList(simple[i], simple[j])), simple[i].unify(simple[j]));
+      }
+    }
+  }
+
+  @Test
+  public void testUnifyUnion() {
+    Schema s1 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA));
+    Schema s2 = INT_SCHEMA;
+    Schema s3 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA,
+        STRING_SCHEMA));
+    Schema s4 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, STRING_SCHEMA,
+        INT_SCHEMA));
+
+    assertUnify(s1, s2, s1);
+    assertUnify(s1, s3, s3);
+    assertEquals(s3, s3.unify(s4));
+  }
+
+  @Test
+  public void testUnifyRecord() {
+    Schema s1 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+    Schema s2 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'int'},"
+        + "{'name': 'b', 'type': 'long'} ] }").replace('\'', '"'));
+    Schema s3 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'},"
+        + "{'name': 'b', 'type': 'int', 'default': 0} ] }").replace('\'', '"'));
+    Schema s4 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'},"
+        + "{'name': 'b', 'type': ['long', 'null']} ] }").replace('\'', '"'));
+
+    assertUnify(s1, s2, s4);
+    assertUnify(s1, s3, s3);
+    assertUnify(s2, s2, s2);
+  }
+
+  @Test
+  public void testUnifyRecursive() {
+    String jsonSchema = "{\"type\":\"record\", \"name\":\"List\", \"fields\": ["
+      +"{\"name\":\"next\", \"type\":\"List\"}]}";
+    Schema s1 = Schema.parse(jsonSchema);
+    Schema s2 = Schema.parse(jsonSchema);
+    assertUnify(s1, s2, s1);
+  }
+
+  @Test(expected=AvroRuntimeException.class)
+  public void testUnifyDifferentDefaults() {
+    Schema s1 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long', 'default': 0} ] }").replace('\'', '"'));
+    Schema s2 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long', 'default': 1} ] }").replace('\'', '"'));
+    s1.unify(s2);
+  }
+
+  @Test
+  public void testUnifyRecordsAliases() {
+    Schema s1 = Schema.parse(("{'type': 'record', 'name': 'Foo',"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+    Schema s2 = Schema.parse(("{'type': 'record', 'name': 'Bar',"
+        + "'fields': [ {'name': 'a', 'type': 'long'} ] }").replace('\'', '"'));
+    s2.addAlias("Foo");
+    assertEquals(s2.unify(s1), s2);
+  }
+
+  @Test
+  public void testFailedUnifyDuplicateNames() {
+    Schema s1 = Schema.createEnum("foo", "", "", Arrays.asList("FOO"));
+    Schema s2 = Schema.createFixed("foo", "", "", 10);
+    Schema s3 = Schema.createRecord("foo", "", "", false);
+
+    assertUnifyFailsDuplicateNames(s1, s2);
+    assertUnifyFailsDuplicateNames(s1, s3);
+    assertUnifyFailsDuplicateNames(s2, s3);
+  }
+
+  @Test
+  public void testUnifyUnionComplex() {
+    Schema s1 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA));
+    Schema s2 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, LONG_SCHEMA));
+    Schema s3 = Schema.createUnion(Arrays.asList(NULL_SCHEMA,
+        Schema.createArray(INT_SCHEMA)));
+    Schema s4 = Schema.createUnion(Arrays.asList(NULL_SCHEMA,
+        Schema.createArray(DOUBLE_SCHEMA)));
+    Schema s5 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, DOUBLE_SCHEMA,
+        Schema.createMap(INT_SCHEMA)));
+    Schema s6 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, INT_SCHEMA,
+        Schema.createMap(DOUBLE_SCHEMA)));
+    Schema s7 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, DOUBLE_SCHEMA,
+        Schema.createMap(DOUBLE_SCHEMA)));
+    Schema e1 = Schema.createEnum("foo", "", "", Arrays.asList("FOO"));
+    Schema e2 = Schema.createEnum("foo", "", "", Arrays.asList("BAR"));
+    Schema e3 = Schema.createEnum("foo", "", "", Arrays.asList("FOO", "BAR"));
+
+    Schema s8 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, e1));
+    Schema s9 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, e2));
+    Schema s10 = Schema.createUnion(Arrays.asList(NULL_SCHEMA, e3));
+
+    assertUnify(s1, s2, s2);
+    assertUnify(INT_SCHEMA, s2, s2);
+    assertUnify(s3, s4, s4);
+    assertUnify(Schema.createArray(INT_SCHEMA), s4, s4);
+    assertUnify(s5, s6, s7);
+    assertUnify(Schema.createMap(INT_SCHEMA), s6, s6);
+    assertEquals(s8.unify(s9), s10);
+    assertUnify(e1, s8, s8);
+    assertUnify(e1, s10, s10);
+  }
 }

@@ -43,6 +43,7 @@ public class Main {
         new DataFileWriteTool(),
         new DataFileGetMetaTool(),
         new DataFileGetSchemaTool(),
+        new DataFileUnifySchemasTool(),
         new IdlTool(),
         new RecodecTool(),
         new RpcReceiveTool(),

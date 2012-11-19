@@ -216,7 +216,33 @@ public class TestDataFileTools {
         "[]    [] []\n[][3]     ");
     assertEquals(5, countRecords(outFile));
   }
-  
+
+  @Test
+  public void testUnifySchemaTool() throws Exception {
+    // create a second file with another schema
+    File sampleFile2 = AvroTestUtil.tempFile(
+      TestDataFileTools.class, "2.avro");
+    Schema schema2 = Schema.create(Type.LONG);
+    DataFileWriter<Object> writer
+      = new DataFileWriter<Object>(new GenericDatumWriter<Object>(schema))
+      .create(schema2, sampleFile2);
+
+    for (int i = 0; i < COUNT; ++i) {
+      writer.append(Long.valueOf(i));
+    }
+    writer.flush();
+    writer.close();
+
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    PrintStream p = new PrintStream(baos);
+    new DataFileUnifySchemasTool().run(
+        null, // stdin
+        p, // stdout
+        null, // stderr
+        Arrays.asList(sampleFile.getPath(), sampleFile2.getPath()));
+    assertEquals(schema2.toString() + "\n",
+        baos.toString("UTF-8").replace("\r", ""));
+  }
   public File writeToAvroFile(String testName, String schema, String json) throws Exception {
     File outFile = AvroTestUtil.tempFile(getClass(),
         TestDataFileTools.class + "." + testName + ".avro");

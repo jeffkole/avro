@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -378,6 +379,77 @@ public abstract class Schema {
            || (other.hashCode == NO_HASHCODE);
   }
 
+  /**
+   * <p>
+   * Returns <code>true</code> if this schema subsumes the other schema
+   * and <code>false</code> otherwise, using the rules from: <a
+   * href="http://avro.apache.org/docs/current/spec.html#Schema+Resolution"
+   * >Schema Resolution</a>.
+   * </p>
+   *
+   * <p>
+   * <b>Note:</b> This method does not consider schema properties, record
+   * properties or field ordering in records.
+   * </p>
+   *
+   * @param other the other schema to consider
+   * @return <code>true</code> if this schema is a superset of the other schema
+   * and <code>false</code> otherwise.
+   */
+  public boolean subsumes(Schema other) {
+    return other != null && getType() == other.getType();
+  }
+
+  /**
+   * <p>
+   * Returns a Schema that is capable of reading this Schema or the Schema
+   * passed in.
+   * </p>
+   *
+   * <p>
+   * <b>Note:</b> This method does not consider schema properties, record
+   * properties or field ordering in records.
+   * </p>
+   *
+   * @param other the schema to unify with
+   * @return a Schema that can read data from either this Schema or the Schema
+   * passed in.
+   */
+  public Schema unify(Schema other) {
+    if (other == null) {
+      throw new NullPointerException("Attempt to unify with null");
+    }
+    if (subsumes(other)) {
+      return this;
+    }
+    if (other.subsumes(this)) {
+      return other;
+    }
+    return Schema.createUnion(Arrays.asList(this, other));
+  }
+
+  /**
+   * <p>
+   * Returns a Schema that is capable of reading this Schema or any of the
+   * Schemas passed in.
+   * </p>
+   *
+   * <p>
+   * <b>Note:</b> This method does not consider schema properties, record
+   * properties or field ordering in records.
+   * </p>
+   * @param schemas the schemas to unify with
+   * @return a Schema that can read data from either this Schema or any of the
+   * Schemas passed in.
+   */
+  public Schema unify(Schema...schemas) {
+    Schema intermediate = this;
+    for (Schema s : schemas) {
+      intermediate = intermediate.unify(s);
+    }
+    return intermediate;
+  }
+
   private static final Set<String> FIELD_RESERVED = new HashSet<String>();
   static {
     Collections.addAll(FIELD_RESERVED, "default","doc","name","order","type");
@@ -568,7 +640,24 @@ public abstract class Schema {
         gen.writeString(alias.getQualified(name.space));
       gen.writeEndArray();
     }
-
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      return getFullName().equals(other.getFullName())
+        || getAliases().contains(other.getFullName());
+    }
+    protected final void unifyAliases(Schema other) {
+      for (String alias : other.getAliases()) {
+        if (!alias.equals(getFullName())) {
+          addAlias(alias);
+        }
+      }
+      if (!getFullName().equals(other.getFullName()) &&
+          !getAliases().contains(other.getFullName())) {
+        addAlias(other.getFullName());
+      }
+    }
   }
 
   private static class SeenPair {
@@ -587,6 +676,12 @@ public abstract class Schema {
   };
   private static final ThreadLocal<Map> SEEN_HASHCODE = new ThreadLocal<Map>() {
     protected Map initialValue() { return new IdentityHashMap(); }
+  };
+  private static final ThreadLocal<Set> SEEN_IS_SUPERSET = new ThreadLocal<Set>() {
+    protected Set initialValue() { return new HashSet(); }
+  };
+  private static final ThreadLocal<Set> SEEN_UNIFY = new ThreadLocal<Set>() {
+    protected Set initialValue() { return new HashSet(); }
   };
 
   @SuppressWarnings(value="unchecked")
@@ -705,6 +800,101 @@ public abstract class Schema {
       }
       gen.writeEndArray();
     }
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      Set seen = SEEN_IS_SUPERSET.get();
+      SeenPair here = new SeenPair(this, other);
+      if (seen.contains(here)) return true;       // prevent stack overflow
+      boolean first = seen.isEmpty();
+      try {
+        seen.add(here);
+        Set<String> fieldNames = new HashSet<String>();
+        for (Field f : other.getFields()) {
+          Field myField = getField(f.name());
+          if (myField == null || !myField.schema().subsumes(f.schema())) {
+            return false;
+          }
+          fieldNames.add(f.name());
+        }
+        for (Field f : getFields()) {
+          // check that the parent fields are all present (or have a default
+          // value).
+          if (!fieldNames.contains(f.name()) && f.defaultValue() == null) {
+            return false;
+          }
+        }
+        return true;
+      } finally {
+        if (first) seen.clear();
+      }
+    }
+
+    /**
+     * Creates an "optional" variant of this field.  If the field has a
+     * non-null defaultValue, then just create a copy of this field. Otherwise,
+     * create a new [f.schema(), null] union schema for the field. Returns the
+     * field.
+     *
+     * @param f the field to consider.
+     * @return the "optional" variant of this field.
+     */
+    private static Field createOptionalField(Field f) {
+      Schema optional;
+      if (f.defaultValue() != null) {
+        optional = f.schema();
+      }
+      else {
+        optional = createUnion(Arrays.asList(f.schema(),
+            new NullSchema()));
+      }
+      return new Field(f.name(), optional, f.doc(), f.defaultValue());
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.RECORD) {
+        return super.unify(other);
+      }
+      Set seen = SEEN_UNIFY.get();
+      SeenPair here = new SeenPair(this, other);
+      if (seen.contains(here)) return other;       // prevent stack overflow
+      boolean first = seen.isEmpty();
+      try {
+        seen.add(here);
+        List<Field> resultFields = new ArrayList<Field>();
+        Set<String> fieldNames = new HashSet<String>();
+        for (Field f : other.getFields()) {
+          Field myField = getField(f.name());
+          fieldNames.add(f.name());
+          if (myField == null) {
+            resultFields.add(createOptionalField(f));
+          }
+          else {
+            Schema unionSchema = myField.schema().unify(f.schema());
+            if (f.defaultValue != null &&
+                !f.defaultValue.equals(myField.defaultValue)) {
+              throw new AvroRuntimeException("Schemas are incompatible. Default values don't match for field: " +
+                  f.name);
+            }
+            Field unionField = new Field(f.name(), unionSchema, f.doc(),
+                f.defaultValue);
+            resultFields.add(unionField);
+          }
+        }
+        for (Field f : getFields()) {
+          if (!fieldNames.contains(f.name())) {
+            resultFields.add(createOptionalField(f));
+          }
+        }
+        RecordSchema result = new RecordSchema(name, doc, isError);
+        result.setFields(resultFields);
+        result.unifyAliases(this);
+        result.unifyAliases(other);
+        return result;
+      } finally {
+        if (first) seen.clear();
+      }
+    }
   }
 
   private static class EnumSchema extends NamedSchema {
@@ -749,6 +939,25 @@ public abstract class Schema {
       aliasesToJson(gen);
       gen.writeEndObject();
     }
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      return getEnumSymbols().containsAll(other.getEnumSymbols());
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.ENUM) {
+        return super.unify(other);
+      }
+      Set<String> symbols = new LinkedHashSet<String>();
+      symbols.addAll(getEnumSymbols());
+      symbols.addAll(other.getEnumSymbols());
+      EnumSchema result = new EnumSchema(name, doc,
+          new LockableArrayList<String>(new ArrayList<String>(symbols)));
+      result.unifyAliases(this);
+      result.unifyAliases(other);
+      return result;
+    }
   }
 
   private static class ArraySchema extends Schema {
@@ -777,6 +986,18 @@ public abstract class Schema {
       props.write(gen);
       gen.writeEndObject();
     }
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      return getElementType().subsumes(other.getElementType());
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.ARRAY) {
+        return super.unify(other);
+      }
+      return new ArraySchema(elementType.unify(other.getElementType()));
+    }
   }
 
   private static class MapSchema extends Schema {
@@ -804,6 +1025,18 @@ public abstract class Schema {
       valueType.toJson(names, gen);
       props.write(gen);
       gen.writeEndObject();
+    }
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      return getValueType().subsumes(other.getValueType());
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.MAP) {
+        return super.unify(other);
+      }
+      return new MapSchema(valueType.unify(other.getValueType()));
     }
   }
 
@@ -853,6 +1086,60 @@ public abstract class Schema {
         type.toJson(names, gen);
       gen.writeEndArray();
     }
+    public boolean subsumes(Schema other) {
+      List<Schema> otherTypes = other.getType() == Type.UNION ?
+          otherTypes = other.getTypes() : Arrays.asList(other);
+
+      /* check that each type in the other (or the other itself) are subsumed
+       * by one of the items in this union.
+       */
+      for (Schema otherType : otherTypes) {
+        boolean found = false;
+        for (Schema thisType : getTypes()) {
+          if (thisType.subsumes(otherType)) {
+            found = true;
+          }
+        }
+        if (!found) {
+          return false;
+        }
+      }
+      return true;
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.UNION) {
+        return super.unify(other);
+      }
+      List<Schema> otherTypes = other.getType() == Type.UNION ?
+          otherTypes = other.getTypes() : Arrays.asList(other);
+
+      LockableArrayList<Schema> resultTypes = new LockableArrayList<Schema>();
+      Set<Schema> seenOtherTypes = new HashSet<Schema>();
+      /* Try to find a type in other to unify with for each type and add it if
+       * found.
+       */
+      for (Schema type : types) {
+        boolean found = false;
+        for (Schema otherType : otherTypes) {
+          Schema unifiedType = type.unify(otherType);
+          if (unifiedType.getType() != Type.UNION) {
+            resultTypes.add(unifiedType);
+            seenOtherTypes.add(otherType);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          resultTypes.add(type);
+        }
+      }
+      for (Schema otherType : other.getTypes()) {
+        if (!seenOtherTypes.contains(otherType)) {
+          resultTypes.add(otherType);
+        }
+      }
+      return new UnionSchema(resultTypes);
+    }
   }
 
   private static class FixedSchema extends NamedSchema {
@@ -886,6 +1173,21 @@ public abstract class Schema {
       aliasesToJson(gen);
       gen.writeEndObject();
     }
+    public boolean subsumes(Schema other) {
+      if (!super.subsumes(other)) {
+        return false;
+      }
+      return getFixedSize() == other.getFixedSize();
+    }
+    public Schema unify(Schema other) {
+      if (other.getType() != Type.FIXED || other.getFixedSize() != getFixedSize()) {
+        return super.unify(other);
+      }
+      FixedSchema result = new FixedSchema(name, doc, getFixedSize());
+      result.unifyAliases(this);
+      result.unifyAliases(other);
+      return result;
+    }
   }
 
   private static class StringSchema extends Schema {
@@ -902,14 +1204,25 @@ public abstract class Schema {
 
   private static class LongSchema extends Schema {
     public LongSchema() { super(Type.LONG); }
+    public boolean subsumes(Schema other) {
+      return other.getType() == Type.INT || other.getType() == Type.LONG;
+    }
   }
 
   private static class FloatSchema extends Schema {
     public FloatSchema() { super(Type.FLOAT); }
+    public boolean subsumes(Schema other) {
+      return other.getType() == Type.INT || other.getType() == Type.LONG
+        || other.getType() == Type.FLOAT;
+    }
   }
 
   private static class DoubleSchema extends Schema {
     public DoubleSchema() { super(Type.DOUBLE); }
+    public boolean subsumes(Schema other) {
+      return other.getType() == Type.INT || other.getType() == Type.LONG
+        || other.getType() == Type.FLOAT || other.getType() == Type.DOUBLE;
+    }
   }
 
   private static class BooleanSchema extends Schema {
